@@ -1,0 +1,157 @@
+<aside class="right-zone">
+    <section class="robot-section">
+        <div class="section-header">
+            <span class="robot-badge leader">Robot 0 (Leader)</span>
+            <span id="status-0" class="status-indicator offline">● Offline</span>
+        </div>
+        <div class="data-container">
+            <div class="encoder-box">
+                <span class="label">Encoder (L/R)</span>
+                <div class="values">
+                    <span id="enc-0-l" class="val">L:000</span>
+                    <span id="enc-0-r" class="val">R:000</span>
+                </div>
+            </div>
+            <div class="chart-box">
+                <canvas id="chart-0"></canvas>
+            </div>
+        </div>
+    </section>
+
+    <div class="divider"></div>
+
+    <section class="robot-section">
+        <div class="section-header">
+            <span class="robot-badge follower">Robot 1 (Follower)</span>
+            <span id="status-1" class="status-indicator offline">● Offline</span>
+        </div>
+        <div class="data-container">
+            <div class="encoder-box">
+                <span class="label">Encoder (L/R)</span>
+                <div class="values">
+                    <span id="enc-1-l" class="val blue">L:000</span>
+                    <span id="enc-1-r" class="val blue">R:000</span>
+                </div>
+            </div>
+            <div class="chart-box">
+                <canvas id="chart-1"></canvas>
+            </div>
+        </div>
+    </section>
+
+    <style>
+        /* 라이트 모드 테마 설정 */
+        .right-zone { 
+            padding: 15px; 
+            background: #f8fafc; /* 밝은 회색 배경 */
+            color: #1e293b; 
+            height: 100%; 
+            font-family: 'Pretendard', sans-serif;
+        }
+        .robot-section { 
+            background: #ffffff; 
+            border: 1px solid #e2e8f0; 
+            border-radius: 12px; 
+            padding: 15px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        .section-header { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            margin-bottom: 15px; 
+        }
+        .robot-badge { 
+            font-size: 12px; 
+            font-weight: 700; 
+            padding: 4px 8px; 
+            border-radius: 6px; 
+        }
+        .leader { background: #dcfce7; color: #166534; }
+        .follower { background: #dbeafe; color: #1e40af; }
+        .status-indicator { font-size: 12px; font-weight: 600; }
+        .offline { color: #ef4444; }
+        .online { color: #10b981; }
+
+        .data-container { display: flex; gap: 15px; align-items: center; }
+        .encoder-box { min-width: 90px; }
+        .encoder-box .label { font-size: 10px; color: #64748b; display: block; margin-bottom: 5px; }
+        .encoder-box .values { font-family: 'JetBrains Mono', monospace; font-size: 18px; font-weight: 800; line-height: 1.2; }
+        .val { color: #10b981; display: block; }
+        .val.blue { color: #3b82f6; }
+
+        .chart-box { flex: 1; height: 100px; }
+        .divider { height: 20px; }
+    </style>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        // 공통 차트 옵션 함수
+        const createChart = (id, color) => {
+            return new Chart(document.getElementById(id).getContext('2d'), {
+                type: 'line',
+                data: {
+                    labels: Array(20).fill(''),
+                    datasets: [{
+                        data: Array(20).fill(null),
+                        borderColor: color,
+                        borderWidth: 2,
+                        tension: 0.3,
+                        pointRadius: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: { display: true, suggestedMin: 0, suggestedMax: 100, ticks: { size: 8 } },
+                        x: { display: false }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        };
+
+        const chart0 = createChart('chart-0', '#10b981');
+        const chart1 = createChart('chart-1', '#3b82f6');
+
+        // 소켓 엔코더 데이터 처리
+        socket.on('encoder_data', (data) => {
+            const robotId = data.id;
+            const lVal = document.getElementById(`enc-${robotId}-l`);
+            const rVal = document.getElementById(`enc-${robotId}-r`);
+            
+            if (lVal && rVal) {
+                lVal.innerText = `L:${String(data.l || 0).padStart(3, '0')}`;
+                rVal.innerText = `R:${String(data.r || 0).padStart(3, '0')}`;
+                
+                // 그래프 업데이트 (L/R 평균값 등으로 시각화)
+                const avg = (parseInt(data.l) + parseInt(data.r)) / 2;
+                const targetChart = robotId === 0 ? chart0 : chart1;
+                targetChart.data.datasets[0].data.push(avg);
+                if (targetChart.data.datasets[0].data.length > 20) targetChart.data.datasets[0].data.shift();
+                targetChart.update('none');
+            }
+        });
+
+        // 주기적 상태 체크
+        function updateStatus() {
+            fetch('/api/telemetry')
+                .then(res => res.json())
+                .then(data => {
+                    const s0 = document.getElementById('status-0');
+                    const s1 = document.getElementById('status-1');
+                    
+                    // 서버 응답 기반으로 상태 업데이트 (예시 로직)
+                    if (data.status === "Online") {
+                        s0.innerText = "● Online"; s0.className = "status-indicator online";
+                        s1.innerText = "● Online"; s1.className = "status-indicator online";
+                    } else {
+                        s0.innerText = "● Offline"; s0.className = "status-indicator offline";
+                        s1.innerText = "● Offline"; s1.className = "status-indicator offline";
+                    }
+                });
+        }
+        setInterval(updateStatus, 2000);
+    </script>
+</aside>
