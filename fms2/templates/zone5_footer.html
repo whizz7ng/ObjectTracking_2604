@@ -36,15 +36,16 @@
         
         <div class="remote-ui">
             <div class="d-pad">
-                <button class="d-btn btn-up" onclick="moveOneMeter('up')">▲</button>
-                <button class="d-btn btn-left" onclick="moveRobot('left')">◀</button>
-                <div class="btn-center" onclick="moveRobot('stop')">●</div>
-                <button class="d-btn btn-right" onclick="moveRobot('right')">▶</button>
-                <button class="circle-btn btn-turnL" onclick="moveRobot('left')">⟲</button>
-                <button class="d-btn btn-down" onclick="moveOneMeter('down')">▼</button>
-                <button class="circle-btn btn-turnR" onclick="moveRobot('right')">⟳</button>
+                <button class="d-btn btn-up">▲</button>
+                <button class="d-btn btn-left">◀</button>
+                <div class="btn-center">●</div>
+                <button class="d-btn btn-right">▶</button>
+                
+                <button class="circle-btn turn-l">⟲</button>
+                <button class="d-btn btn-down">▼</button>
+                <button class="circle-btn turn-r">⟳</button>
             </div>
-        </div>
+        </div>        
     </section>
 </footer>
 
@@ -63,7 +64,7 @@
     .log-table td { padding: 6px 10px; border-bottom: 1px dotted #f1f5f9; font-family: 'JetBrains Mono', monospace; }
     .log-error { color: #ef4444; background: #fef2f2; font-weight: bold; }
 
-    /* 원래 D-PAD 디자인 복원 */
+    /* D-PAD 디자인 */
     .remote-ui { flex: 1; display: flex; justify-content: center; align-items: center; }
     .d-pad { 
         display: grid; 

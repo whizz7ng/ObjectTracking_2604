@@ -148,3 +148,16 @@
     color: white !important; 
     transform: scale(0.9) translateY(1px) !important; 
 }
+
+/* --- 버튼별 위치(주소) 명시적 지정 --- */
+.btn-up    { grid-area: up !important; }
+.btn-left  { grid-area: left !important; }
+.btn-right { grid-area: right !important; }
+.btn-down  { grid-area: down !important; }
+
+/* 회전 버튼: 클래스명 turn-l, turn-r이 아래 turnL, turnR 위치로 이동합니다 */
+.turn-l    { grid-area: turnL !important; } 
+.turn-r    { grid-area: turnR !important; }
+
+/* stop 버튼 위치 */
+.btn-center { grid-area: center !important; }

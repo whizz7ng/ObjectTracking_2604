@@ -1,156 +1,120 @@
 const socket = io();
 
-// 로봇 상태 관리 (지도 아이콘 위치 및 시뮬레이션 데이터)
+// 로봇 상태 관리 (시각화용)
 window.robotState = {
     x: 0, y: 0,
-    step: 25,
-    currentSpeed: 0.0 
+    step: 25
 };
 
-let isAutoMoving = false;
-let accumulatedDistance = 0; 
-let targetDistanceTicks = 50; 
-let activeRobotId = 0; // 현재 제어 중인 로봇 ID (0 또는 1)
+// 수동 제어 대상 고정 (Robot 0)
+const MANUAL_ROBOT_ID = 0;
 
-document.addEventListener('DOMContentLoaded', () => {
+window.moveRobot = (direction) => {
+    let key = '';
+    switch(direction) {
+        case 'up':    key = 'w'; break;
+        case 'down':  key = 's'; break;
+        case 'left':  key = 'a'; break;
+        case 'right': key = 'd'; break;
+        case 'stop':  key = 's'; break;
+        case 'turnL': key = 'wa'; break;
+        case 'turnR': key = 'wd'; break;
+    }
+
+    // [로봇 0 전용] 단순 문자 명령 전송 (w, a, s, d 등)
+    socket.emit('drive_control', { id: MANUAL_ROBOT_ID, command: key });
+
+    // UI 로그 업데이트
+    addLog('Control', `Robot ${MANUAL_ROBOT_ID}: [${key}] (${direction})`, 'info');
+
+    // 지도 아이콘 시각화 업데이트
+    updateMapVisualization(direction);
+};
+
+// 지도 아이콘 이동 로직 분리
+function updateMapVisualization(direction) {
     const robotMarker = document.getElementById('robot-1');
     const mapContainer = document.querySelector('.map-zone');
+    
+    if (!['up', 'down', 'left', 'right'].includes(direction) || !mapContainer || !robotMarker) return;
 
-    // --- 1. 초기 위치 설정 (중앙 정렬) ---
+    let nextX = window.robotState.x;
+    let nextY = window.robotState.y;
+
+    if (direction === 'up') nextY -= window.robotState.step;
+    else if (direction === 'down') nextY += window.robotState.step;
+    else if (direction === 'left') nextX -= window.robotState.step;
+    else if (direction === 'right') nextX += window.robotState.step;
+
+    // 경계 제한 확인
+    if (nextX >= 0 && nextX <= (mapContainer.clientWidth - robotMarker.clientWidth)) window.robotState.x = nextX;
+    if (nextY >= 0 && nextY <= (mapContainer.clientHeight - robotMarker.clientHeight)) window.robotState.y = nextY;
+    
+    robotMarker.style.left = `${window.robotState.x}px`;
+    robotMarker.style.top = `${window.robotState.y}px`;
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    // 초기 중앙 정렬
     const setCenter = () => {
+        const robotMarker = document.getElementById('robot-1');
+        const mapContainer = document.querySelector('.map-zone');
         if (!robotMarker || !mapContainer) return;
         window.robotState.x = (mapContainer.clientWidth / 2) - (robotMarker.clientWidth / 2);
         window.robotState.y = (mapContainer.clientHeight / 2) - (robotMarker.clientHeight / 2);
-        updatePosition();
-        addLog('System', 'CENTER_ALIGN', 'info');
-    };
-
-    const updatePosition = () => {
-        if (!robotMarker) return;
         robotMarker.style.left = `${window.robotState.x}px`;
         robotMarker.style.top = `${window.robotState.y}px`;
     };
 
-    // --- 2. 로봇 제어 핵심 함수 (D-PAD & 키보드 통합) ---
-    // direction: 'up', 'down', 'left', 'right', 'stop'
-    // key: 'w', 's', 'a', 'd'
-    window.moveRobot = (direction) => {
-        let key = '';
-        switch(direction) {
-            case 'up':    key = 'w'; break;
-            case 'down':  key = 's'; break;
-            case 'left':  key = 'a'; break;
-            case 'right': key = 'd'; break;
-            case 'stop':  key = 's'; break;
-        }
+    // D-Pad 클릭 이벤트 (이벤트 위임)
+    const dpadContainer = document.querySelector('.d-pad');
+    if (dpadContainer) {
+        dpadContainer.onclick = (e) => {
+            const btn = e.target.closest('button, .d-btn, .btn-center, .circle-btn, .turn-l, .turn-r');
+            if (!btn) return;
 
-        let finalCmd = '';
+            e.preventDefault();
+            e.stopImmediatePropagation(); 
 
-        // [Robot 0] 단순 문자 전송
-        if (activeRobotId === 0) {
-            finalCmd = key;
-        } 
-        // [Robot 1] 부호 및 출력값 포함 프로토콜
-        else if (activeRobotId === 1) {
-            const withSign = (num) => (num >= 0 ? `+${num}` : `${num}`);
-            
-            // 전진 파워 10, 좌회전(-10, +30) 예시 값 적용
-            const p = 10;   // w 파워
-            const al = -10; // 좌측 모터
-            const dl = 30;  // 우측 모터
+            let direction = '';
+            if (btn.classList.contains('btn-up')) direction = 'up';
+            else if (btn.classList.contains('btn-down')) direction = 'down';
+            else if (btn.classList.contains('btn-left')) direction = 'left';
+            else if (btn.classList.contains('btn-right')) direction = 'right';
+            else if (btn.classList.contains('btn-center')) direction = 'stop';
+            else if (btn.classList.contains('turn-l')) direction = 'turnL';
+            else if (btn.classList.contains('turn-r')) direction = 'turnR';
 
-            if (key === 'w') finalCmd = `w${withSign(p)}`;
-            else if (key === 's') finalCmd = `s`;
-            else if (key === 'a') finalCmd = `a${withSign(al)},d${withSign(dl)}`;
-            else if (key === 'd') finalCmd = `a${withSign(dl)},d${withSign(al)}`;
-        }
+            if (direction) window.moveRobot(direction);
+        };
+    }
 
-        // 서버로 명령 전송
-        socket.emit('drive_control', { id: activeRobotId, command: finalCmd });
-
-        // 지도 아이콘 이동 시각화 (상하좌우 방향 기준)
-        if (direction !== 'stop' && mapContainer) {
-            let nextX = window.robotState.x;
-            let nextY = window.robotState.y;
-            switch(direction) {
-                case 'up':    nextY -= window.robotState.step; break;
-                case 'down':  nextY += window.robotState.step; break;
-                case 'left':  nextX -= window.robotState.step; break;
-                case 'right': nextX += window.robotState.step; break;
-            }
-            if (nextX >= 0 && nextX <= (mapContainer.clientWidth - robotMarker.clientWidth)) window.robotState.x = nextX;
-            if (nextY >= 0 && nextY <= (mapContainer.clientHeight - robotMarker.clientHeight)) window.robotState.y = nextY;
-            updatePosition();
-        }
-
-        addLog('Control', `Robot ${activeRobotId}: [${finalCmd}]`, 'info');
-    };
-
-    // --- 3. 이벤트 바인딩 (D-PAD & 키보드) ---
-
-    // D-PAD 버튼: 상(w), 하(s), 좌(a), 우(d) 매핑
-    const dpadMap = {
-        '.btn-up': 'up',
-        '.btn-down': 'down',
-        '.btn-left': 'left',
-        '.btn-right': 'right',
-        '.btn-center': 'stop'
-    };
-
-    Object.entries(dpadMap).forEach(([selector, dir]) => {
-        const btn = document.querySelector(selector);
-        if (btn) btn.addEventListener('click', () => window.moveRobot(dir));
-    });
-
-    // 키보드 이벤트 (wsad)
-    document.addEventListener('keydown', (e) => {
+    // 키보드 조작
+    document.onkeydown = (e) => {
         if (e.target.tagName === 'INPUT') return;
         const key = e.key.toLowerCase();
-        if (key === 'w') window.moveRobot('up');
-        else if (key === 's') window.moveRobot('down');
-        else if (key === 'a') window.moveRobot('left');
-        else if (key === 'd') window.moveRobot('right');
-        else if (e.code === 'Space') {
-            e.preventDefault();
-            window.moveRobot('stop');
-        }
-    });
-
-    // --- 4. 데이터 수신 ---
-    socket.on('encoder_data', (data) => {
-        const robotId = data.id;
-        const lEl = document.getElementById(`enc-${robotId}-l`);
-        const rEl = document.getElementById(`enc-${robotId}-r`);
-        if (lEl && rEl) {
-            lEl.innerText = `L:${String(data.l).padStart(3, '0')}`;
-            rEl.innerText = `R:${String(data.r).padStart(3, '0')}`;
-        }
-    });
-
-    socket.on('vision_data', (data) => {
-        const distEl = document.getElementById('ui-dist');
-        const angleEl = document.getElementById('ui-angle');
-        if (distEl && angleEl) {
-            distEl.innerText = data.dist;
-            angleEl.innerText = data.angle;
-            distEl.style.color = parseFloat(data.dist) < 20.0 ? "#ef4444" : "#3b82f6";
-        }
-    });
+        let direction = '';
+        if (key === 'w') direction = 'up';
+        else if (key === 's') direction = 'down';
+        else if (key === 'a') direction = 'left';
+        else if (key === 'd') direction = 'right';
+        else if (e.code === 'Space') { e.preventDefault(); direction = 'stop'; }
+        if (direction) window.moveRobot(direction);
+    };
 
     socket.on('connect', () => addLog('Network', 'Connected to Server', 'info'));
     socket.on('disconnect', () => addLog('Network', 'Disconnected from Server', 'error'));
-
+    
     setTimeout(setCenter, 100);
 });
 
-// --- 5. 자동 로그 시스템 ---
+// 로그 출력 함수
 function addLog(activity, message, type = 'info') {
     const logTbody = document.getElementById('log-tbody');
     const logWrapper = document.getElementById('log-wrapper');
     if (!logTbody) return;
 
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString('ko-KR', { hour12: false });
+    const timeStr = new Date().toLocaleTimeString('ko-KR', { hour12: false });
     const rowClass = type === 'error' ? 'class="log-error"' : '';
     
     const row = `<tr ${rowClass}>
@@ -161,15 +125,18 @@ function addLog(activity, message, type = 'info') {
                 </tr>`;
     
     logTbody.insertAdjacentHTML('beforeend', row);
-    if (logTbody.rows.length > 1000) logTbody.deleteRow(0);
-    
-    if (logWrapper) {
-        const isAtBottom = logWrapper.scrollHeight - logWrapper.clientHeight <= logWrapper.scrollTop + 50;
-        if (isAtBottom) logWrapper.scrollTop = logWrapper.scrollHeight;
-    }
+    if (logTbody.rows.length > 500) logTbody.deleteRow(0); // 로그 과다 방지
+    if (logWrapper) logWrapper.scrollTop = logWrapper.scrollHeight;
 }
 
-function changeMode(modeName) {
-    socket.emit('change_vision_mode', { mode: modeName });
-    addLog('Vision', `MODE_SET: ${modeName}`, 'info');
-}
+// 비전 데이터 및 서버 로그 수신 (UI 업데이트 전용)
+socket.on('vision_data', (data) => {
+    const distEl = document.getElementById('ui-dist');
+    const angleEl = document.getElementById('ui-angle');
+    if (distEl) distEl.textContent = data.dist.toFixed(1);
+    if (angleEl) angleEl.textContent = data.angle.toFixed(1);
+});
+
+socket.on('log', (data) => {
+    addLog(data.type || 'AutoControl', data.msg, data.status === 'success' ? 'info' : 'error');
+});

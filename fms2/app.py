@@ -1,5 +1,5 @@
 import os
-from flask import Flask, render_template, jsonify, Response
+from flask import Flask, render_template, Response
 from flask_socketio import SocketIO
 from vision import VisionSystem
 from robot_manager import RobotManager
@@ -8,7 +8,6 @@ import time
 import threading
 import math
 
-# 404 방지를 위한 절대 경로 설정
 base_dir = os.path.dirname(os.path.abspath(__file__))
 app = Flask(__name__, 
             template_folder=os.path.join(base_dir, 'templates'),
@@ -18,9 +17,7 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 vision = VisionSystem(os.path.join(base_dir, "calibration.npz"))
 robot_mgr = RobotManager()
 
-# 전역 변수
 current_vision_mode = 'TRACK'
-latest_vision_data = {"dist": 0, "angle": 0}
 last_cmd_time = 0
 
 @app.route('/')
@@ -32,25 +29,21 @@ def handle_mode_change(data):
     global current_vision_mode
     current_vision_mode = data.get('mode')
     if current_vision_mode != 'TRACK':
-        robot_mgr.send_command(0, '3')
-        robot_mgr.send_command(1, '3')
+        robot_mgr.send_command(0, 's')
+        robot_mgr.send_command(1, 's')
 
 cap = cv2.VideoCapture(0)
 
 def gen_frames():
-    global latest_vision_data, last_cmd_time, current_vision_mode
-    
+    global last_cmd_time, current_vision_mode
     
     while True:
         success, frame = cap.read()
-        if not success: 
-            print("⚠️ 카메라 프레임을 읽을 수 없습니다.")
-            break
+        if not success: break
 
         frame, markers = vision.process_frame(frame)
 
         if 0 in markers and 1 in markers:
-            # 거리/각도 계산 로직
             r_pos, r_head = markers[0]['center'], markers[0]['heading']
             t_pos = markers[1]['center']
             
@@ -60,26 +53,49 @@ def gen_frames():
             target_rad = math.atan2(t_pos[1]-r_pos[1], t_pos[0]-r_pos[0])
             error_angle = (math.degrees(target_rad) - r_head + 180) % 360 - 180
 
-            latest_vision_data = {"dist": round(dist_cm, 1), "angle": round(error_angle, 1)}
-            socketio.emit('vision_data', latest_vision_data)
+            socketio.emit('vision_data', {
+                "dist": round(dist_cm, 1), 
+                "angle": round(error_angle, 1)
+            })
+            
             cv2.line(frame, r_pos, t_pos, (255, 0, 0), 2)
 
-            # --- [자동 추적 로직: 로봇 1에게 명령] ---
+            # --- [핵심 제어 로직 시작] ---
             if current_vision_mode == 'TRACK':
                 now = time.time()
-                if now - last_cmd_time > 0.15:
-                    # 1. 각도 먼저 맞추기 (오차가 클 때)
-                    if error_angle > 15:
-                        robot_mgr.send_command(1, 'L') # 왼쪽으로 회전
-                    elif error_angle < -15:
-                        robot_mgr.send_command(1, 'R') # 오른쪽으로 회전
-                    # 2. 각도가 어느 정도 맞으면 전진/후진
+                if now - last_cmd_time > 0.05:  # 50ms 주기
+                    
+                    # 1. 20cm보다 멀 때만 전송 실행
+                    if dist_cm > 20.0:
+                        dist_error = dist_cm - 20.0
+                        v = dist_error * 2.5 
+                        w = error_angle * 1.5 if abs(error_angle) > 5 else 0
+
+                        pwm_l = int(v + w)
+                        pwm_r = int(v - w)
+
+                        limit = 60
+                        pwm_l = max(min(pwm_l, limit), -limit)
+                        pwm_r = max(min(pwm_r, limit), -limit)
+
+                        def sign(n): return f"+{n}" if n >= 0 else str(n)
+                        final_auto_cmd = f"a{sign(pwm_l)}d{sign(pwm_r)}"
+
+                        # 명령 전송 및 로그 출력
+                        robot_mgr.send_command(1, final_auto_cmd)
+                        
+                        socketio.emit('log', {
+                            'type': 'AutoControl',
+                            'msg': f"Robot 1: [{final_auto_cmd}] (Dist: {dist_cm:.1f}cm)",
+                            'status': 'success'
+                        })
+                    
+                    # 2. 20cm 미만이면 아무것도 하지 않음 (pass)
                     else:
-                        if dist_cm > 30: robot_mgr.send_command(1, '1')
-                        elif dist_cm < 15: robot_mgr.send_command(1, '2')
-                        else: robot_mgr.send_command(1, '3')
-                    last_cmd_time = now                    
-            
+                        pass
+                    
+                    last_cmd_time = now
+            # --- [핵심 제어 로직 끝] ---
 
         ret, buffer = cv2.imencode('.jpg', frame)
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
@@ -90,7 +106,6 @@ def video_feed():
 
 @socketio.on('drive_control')
 def handle_drive(data):
-    # --- [수동 조종 로직: 로봇 0에게 명령] ---
     cmd = str(data.get('command'))
     robot_mgr.send_command(0, cmd)
 
