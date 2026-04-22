@@ -2,7 +2,7 @@
     <section class="footer-card log-section">
         <div class="card-header">
             <div class="tabs">
-                <span class="tab active">실시간 시스템 로그 (자동 기록 중...)</span>
+                <span class="tab active">실시간 시스템 로그 </span>
             </div>
             <div class="mode-switch-group">
                 <button class="m-btn track" onclick="changeMode('TRACK')">자동 추적</button>
@@ -26,9 +26,20 @@
     </section>
 
     <section class="footer-card remote-section">
-        <div class="card-header">
-            <span class="tab active">Robot 0 원격 제어</span>
-            <label class="switch">
+        <div class="card-header" style="display: flex; flex-wrap: nowrap; gap: 8px; overflow: visible;">
+            <div style="display: flex; align-items: center; gap: 8px; flex-shrink: 0;">
+                <span class="tab active" style="white-space: nowrap;">Robot 0 제어</span>
+                
+                <div style="display: flex; align-items: center; background: #ffffff; padding: 2px 6px; border-radius: 6px; border: 2px solid #3b82f6; box-shadow: 0 2px 4px rgba(59, 130, 246, 0.1);">
+                    <span style="font-size: 11px; color: #3b82f6; font-weight: 800; margin-right: 4px;">PWM</span>
+                    <input type="number" id="manual-pwm" value="40" min="0" max="100" 
+                        onclick="event.stopPropagation();" 
+                        style="width: 42px; height: 22px; border: none; background: transparent; 
+                                font-size: 14px; font-weight: bold; color: #000; text-align: center; outline: none; cursor: text;">
+                </div>
+            </div>
+
+            <label class="switch" style="margin-left: auto; flex-shrink: 0;">
                 <input type="checkbox" id="remote-toggle" checked>
                 <span class="slider"></span>
             </label>
@@ -47,6 +58,8 @@
             </div>
         </div>        
     </section>
+    
+    
 </footer>
 
 <style>

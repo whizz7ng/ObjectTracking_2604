@@ -20,9 +20,17 @@ robot_mgr = RobotManager()
 current_vision_mode = 'TRACK'
 last_cmd_time = 0
 
+# --- [수정] 보정값 저장 변수 추가 ---
+robot_calibrations = {0: 1.0, 1: 1.0}
+
 @app.route('/')
 def index():
     return render_template('index.html')
+
+# --- [복구] 누락되었던 비디오 피드 라우트 ---
+@app.route('/video_feed')
+def video_feed():
+    return Response(gen_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @socketio.on('change_vision_mode')
 def handle_mode_change(data):
@@ -32,15 +40,22 @@ def handle_mode_change(data):
         robot_mgr.send_command(0, 's')
         robot_mgr.send_command(1, 's')
 
+# --- [추가] 브라우저 보정값 수신 ---
+@socketio.on('update_calibration')
+def handle_calibration(data):
+    global robot_calibrations
+    try:
+        robot_calibrations[int(data.get('id'))] = float(data.get('factor', 1.0))
+    except: pass
+
 cap = cv2.VideoCapture(0)
 
 def gen_frames():
-    global last_cmd_time, current_vision_mode
+    global last_cmd_time, current_vision_mode, robot_calibrations
     
     while True:
         success, frame = cap.read()
         if not success: break
-
         frame, markers = vision.process_frame(frame)
 
         if 0 in markers and 1 in markers:
@@ -53,56 +68,54 @@ def gen_frames():
             target_rad = math.atan2(t_pos[1]-r_pos[1], t_pos[0]-r_pos[0])
             error_angle = (math.degrees(target_rad) - r_head + 180) % 360 - 180
 
-            socketio.emit('vision_data', {
-                "dist": round(dist_cm, 1), 
-                "angle": round(error_angle, 1)
-            })
-            
+            socketio.emit('vision_data', {"dist": round(dist_cm, 1), "angle": round(error_angle, 1)})
             cv2.line(frame, r_pos, t_pos, (255, 0, 0), 2)
 
-            # --- [핵심 제어 로직 시작] ---
+
             if current_vision_mode == 'TRACK':
                 now = time.time()
-                if now - last_cmd_time > 0.05:  # 50ms 주기
-                    
-                    # 1. 20cm보다 멀 때만 전송 실행
+                if now - last_cmd_time > 0.05:
                     if dist_cm > 20.0:
                         dist_error = dist_cm - 20.0
                         v = dist_error * 2.5 
                         w = error_angle * 1.5 if abs(error_angle) > 5 else 0
 
-                        pwm_l = int(v + w)
-                        pwm_r = int(v - w)
+                        # 1. 먼저 순수 계산
+                        pwm_l_raw = int(v + w)
+                        pwm_r_raw = int(v - w)
 
+                        # 2. 하드웨어 한계치(limit) 적용
                         limit = 60
-                        pwm_l = max(min(pwm_l, limit), -limit)
-                        pwm_r = max(min(pwm_r, limit), -limit)
+                        pwm_l = max(min(pwm_l_raw, limit), -limit)
+                        pwm_r = max(min(pwm_r_raw, limit), -limit)
+
+                        # 3. 마지막에 보정 계수 곱하기 (이 순서여야 0.5 반영이 보임)
+                        # Robot 0은 수동이므로 여기서는 Robot 1(자동주행)만 적용
+                        pwm_r = int(pwm_r * robot_calibrations.get(1, 1.0))
 
                         def sign(n): return f"+{n}" if n >= 0 else str(n)
                         final_auto_cmd = f"a{sign(pwm_l)}d{sign(pwm_r)}"
-
-                        # 명령 전송 및 로그 출력
+                        
                         robot_mgr.send_command(1, final_auto_cmd)
                         
                         socketio.emit('log', {
                             'type': 'AutoControl',
-                            'msg': f"Robot 1: [{final_auto_cmd}] (Dist: {dist_cm:.1f}cm)",
+                            'msg': f"Robot 1: [{final_auto_cmd}] (Cali: {robot_calibrations.get(1)})",
                             'status': 'success'
                         })
-                    
-                    # 2. 20cm 미만이면 아무것도 하지 않음 (pass)
+                    # --- [추가] 20cm 이하일 경우 정지 명령 전송 ---
                     else:
-                        pass
-                    
+                        robot_mgr.send_command(1, "a+0d+0")
+                        socketio.emit('log', {
+                            'type': 'AutoControl',
+                            'msg': "Robot 1: Target Reached (Stop)",
+                            'status': 'success'
+                        })
                     last_cmd_time = now
-            # --- [핵심 제어 로직 끝] ---
+
 
         ret, buffer = cv2.imencode('.jpg', frame)
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
-
-@app.route('/video_feed')
-def video_feed():
-    return Response(gen_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @socketio.on('drive_control')
 def handle_drive(data):

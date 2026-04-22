@@ -17,8 +17,8 @@ class RobotManager:
         # 로봇의 실제 MAC 주소를 소문자로 입력하세요.
         # 예: "3c:61:05:xx:xx:xx"
         self.ROBOT_MACS = {
-            "00:00:00:00:00:00": 0,  # 리더 로봇 (수동 조종용)
-            "00:00:00:00:00:01": 1   # 추적 로봇 (자동 추종용)
+            "cc:7b:5c:27:d3:c0": 0,  # 리더 로봇 (수동 조종용)
+            "d0:ef:76:47:d3:f4": 1   # 추적 로봇 (자동 추종용) 
         }
 
     def get_mac_address(self, ip):
@@ -65,8 +65,8 @@ class RobotManager:
                 print(f"✅ 로봇 {robot_id} 인식 성공 (MAC: {mac}, IP: {ip_address})")
             else:
                 # 등록되지 않은 MAC일 경우 에러 메시지 출력 후 연결 종료
-                print(f"⚠️ 미등록 기기 접속 차단 - IP: {ip_address}, MAC: {mac}")
-                print(f"💡 이 MAC 주소를 ROBOT_MACS 설정에 추가하세요.")
+#                print(f"⚠️ 미등록 기기 접속 차단 - IP: {ip_address}, MAC: {mac}")
+#                print(f"💡 이 MAC 주소를 ROBOT_MACS 설정에 추가하세요.")
                 client.close()
                 continue
             

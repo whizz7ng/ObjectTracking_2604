@@ -161,3 +161,13 @@
 
 /* stop 버튼 위치 */
 .btn-center { grid-area: center !important; }
+
+/* --- PWM 입력창 강제 표시 (숨김 설정 예외 처리) --- */
+.card-header input#manual-pwm {
+    display: inline-block !important; /* display: none을 덮어씌움 */
+}
+
+/* 추가적으로, header의 label 중 스위치가 아닌 것(PWM 텍스트 등)도 필요하면 표시 */
+.card-header label[for="manual-pwm"] {
+    display: inline-block !important;
+}

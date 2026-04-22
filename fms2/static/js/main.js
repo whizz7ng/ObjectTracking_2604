@@ -1,142 +1,98 @@
 const socket = io();
-
-// 로봇 상태 관리 (시각화용)
-window.robotState = {
-    x: 0, y: 0,
-    step: 25
-};
-
-// 수동 제어 대상 고정 (Robot 0)
+window.robotState = { x: 0, y: 0, step: 25 };
 const MANUAL_ROBOT_ID = 0;
 
-window.moveRobot = (direction) => {
-    let key = '';
-    switch(direction) {
-        case 'up':    key = 'w'; break;
-        case 'down':  key = 's'; break;
-        case 'left':  key = 'a'; break;
-        case 'right': key = 'd'; break;
-        case 'stop':  key = 's'; break;
-        case 'turnL': key = 'wa'; break;
-        case 'turnR': key = 'wd'; break;
-    }
-
-    // [로봇 0 전용] 단순 문자 명령 전송 (w, a, s, d 등)
-    socket.emit('drive_control', { id: MANUAL_ROBOT_ID, command: key });
-
-    // UI 로그 업데이트
-    addLog('Control', `Robot ${MANUAL_ROBOT_ID}: [${key}] (${direction})`, 'info');
-
-    // 지도 아이콘 시각화 업데이트
-    updateMapVisualization(direction);
+// --- [추가] 보정값 동기화 함수 ---
+const syncCalibration = (robotId) => {
+    const factor = document.getElementById(`calib-${robotId}`)?.value || "1.0";
+    socket.emit('update_calibration', { id: robotId, factor: factor });
 };
 
-// 지도 아이콘 이동 로직 분리
-function updateMapVisualization(direction) {
-    const robotMarker = document.getElementById('robot-1');
-    const mapContainer = document.querySelector('.map-zone');
+window.moveRobot = (direction) => {
+    const basePwm = parseInt(document.getElementById('manual-pwm')?.value || "40");
+    const factor0 = parseFloat(document.getElementById('calib-0')?.value || "1.0");
     
-    if (!['up', 'down', 'left', 'right'].includes(direction) || !mapContainer || !robotMarker) return;
-
-    let nextX = window.robotState.x;
-    let nextY = window.robotState.y;
-
-    if (direction === 'up') nextY -= window.robotState.step;
-    else if (direction === 'down') nextY += window.robotState.step;
-    else if (direction === 'left') nextX -= window.robotState.step;
-    else if (direction === 'right') nextX += window.robotState.step;
-
-    // 경계 제한 확인
-    if (nextX >= 0 && nextX <= (mapContainer.clientWidth - robotMarker.clientWidth)) window.robotState.x = nextX;
-    if (nextY >= 0 && nextY <= (mapContainer.clientHeight - robotMarker.clientHeight)) window.robotState.y = nextY;
+    const rightPwm = Math.round(basePwm * factor0);
+    const halfBasePwm = Math.floor(basePwm / 2);
+    const halfRightPwm = Math.round(halfBasePwm * factor0);
     
-    robotMarker.style.left = `${window.robotState.x}px`;
-    robotMarker.style.top = `${window.robotState.y}px`;
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-    // 초기 중앙 정렬
-    const setCenter = () => {
-        const robotMarker = document.getElementById('robot-1');
-        const mapContainer = document.querySelector('.map-zone');
-        if (!robotMarker || !mapContainer) return;
-        window.robotState.x = (mapContainer.clientWidth / 2) - (robotMarker.clientWidth / 2);
-        window.robotState.y = (mapContainer.clientHeight / 2) - (robotMarker.clientHeight / 2);
-        robotMarker.style.left = `${window.robotState.x}px`;
-        robotMarker.style.top = `${window.robotState.y}px`;
-    };
-
-    // D-Pad 클릭 이벤트 (이벤트 위임)
-    const dpadContainer = document.querySelector('.d-pad');
-    if (dpadContainer) {
-        dpadContainer.onclick = (e) => {
-            const btn = e.target.closest('button, .d-btn, .btn-center, .circle-btn, .turn-l, .turn-r');
-            if (!btn) return;
-
-            e.preventDefault();
-            e.stopImmediatePropagation(); 
-
-            let direction = '';
-            if (btn.classList.contains('btn-up')) direction = 'up';
-            else if (btn.classList.contains('btn-down')) direction = 'down';
-            else if (btn.classList.contains('btn-left')) direction = 'left';
-            else if (btn.classList.contains('btn-right')) direction = 'right';
-            else if (btn.classList.contains('btn-center')) direction = 'stop';
-            else if (btn.classList.contains('turn-l')) direction = 'turnL';
-            else if (btn.classList.contains('turn-r')) direction = 'turnR';
-
-            if (direction) window.moveRobot(direction);
-        };
+    let key = '';
+    switch(direction) {
+        case 'up':    key = `a+${basePwm},d+${rightPwm}`; break;
+        case 'down':  key = `a-${basePwm},d-${rightPwm}`; break;
+        case 'left':  key = `a+${halfBasePwm},d+${rightPwm}`; break;
+        case 'right': key = `a+${basePwm},d+${halfRightPwm}`; break;
+        case 'turnL': key = `a-${basePwm},d+${rightPwm}`; break;
+        case 'turnR': key = `a+${basePwm},d-${rightPwm}`; break;
+        case 'stop':  key = 'a+0,d+0'; break;
     }
 
-    // 키보드 조작
+    if (key) {
+        socket.emit('drive_control', { id: MANUAL_ROBOT_ID, command: key + '\n' });
+        addLog('Control', key, 'info'); 
+    }
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+    // --- [추가] 이벤트 리스너 등록 ---
+    document.getElementById('calib-0')?.addEventListener('change', () => syncCalibration(0));
+    document.getElementById('calib-1')?.addEventListener('change', () => syncCalibration(1));
+    setTimeout(() => { syncCalibration(0); syncCalibration(1); }, 1000);
+
+    // 기존 제어 로직 유지
+    let isMoving = false;
+    const dpad = document.querySelector('.d-pad');
+    if (dpad) {
+        const handleStart = (e) => {
+            if (isMoving) return;
+            const btn = e.target.closest('button, .d-btn, .btn-center, .circle-btn, .turn-l, .turn-r');
+            if (!btn) return;
+            e.preventDefault();
+            let dir = '';
+            if (btn.classList.contains('btn-up')) dir = 'up';
+            else if (btn.classList.contains('btn-down')) dir = 'down';
+            else if (btn.classList.contains('btn-left')) dir = 'left';
+            else if (btn.classList.contains('btn-right')) dir = 'right';
+            else if (btn.classList.contains('btn-center')) dir = 'stop';
+            else if (btn.classList.contains('turn-l')) dir = 'turnL';
+            else if (btn.classList.contains('turn-r')) dir = 'turnR';
+            if (dir) { isMoving = true; window.moveRobot(dir); }
+        };
+        const handleEnd = (e) => { if (isMoving) { isMoving = false; window.moveRobot('stop'); } };
+        dpad.onmousedown = handleStart; dpad.onmouseup = handleEnd; dpad.onmouseleave = handleEnd;
+        dpad.ontouchstart = handleStart; dpad.ontouchend = handleEnd;
+    }
+
     document.onkeydown = (e) => {
-        if (e.target.tagName === 'INPUT') return;
+        if (e.target.tagName === 'INPUT' || e.repeat) return;
         const key = e.key.toLowerCase();
-        let direction = '';
-        if (key === 'w') direction = 'up';
-        else if (key === 's') direction = 'down';
-        else if (key === 'a') direction = 'left';
-        else if (key === 'd') direction = 'right';
-        else if (e.code === 'Space') { e.preventDefault(); direction = 'stop'; }
-        if (direction) window.moveRobot(direction);
+        let dir = key === 'w' ? 'up' : key === 's' ? 'down' : key === 'a' ? 'left' : key === 'd' ? 'right' : '';
+        if (e.code === 'Space') { e.preventDefault(); dir = 'stop'; }
+        if (dir) { isMoving = true; window.moveRobot(dir); }
     };
 
-    socket.on('connect', () => addLog('Network', 'Connected to Server', 'info'));
-    socket.on('disconnect', () => addLog('Network', 'Disconnected from Server', 'error'));
-    
-    setTimeout(setCenter, 100);
+    document.onkeyup = (e) => {
+        if (['w', 'a', 's', 'd'].includes(e.key.toLowerCase()) && isMoving) {
+            isMoving = false; window.moveRobot('stop');
+        }
+    };
+
+    socket.on('vision_data', (data) => {
+        document.getElementById('ui-dist').textContent = data.dist.toFixed(1);
+        document.getElementById('ui-angle').textContent = data.angle.toFixed(1);
+    });
+    socket.on('log', (data) => addLog(data.type, data.msg, data.status === 'success' ? 'info' : 'error'));
 });
 
-// 로그 출력 함수
 function addLog(activity, message, type = 'info') {
-    const logTbody = document.getElementById('log-tbody');
-    const logWrapper = document.getElementById('log-wrapper');
-    if (!logTbody) return;
-
-    const timeStr = new Date().toLocaleTimeString('ko-KR', { hour12: false });
-    const rowClass = type === 'error' ? 'class="log-error"' : '';
-    
-    const row = `<tr ${rowClass}>
-                    <td>${timeStr}</td>
-                    <td>${activity}</td>
-                    <td style="font-weight:bold;">${message}</td>
-                    <td>${type === 'error' ? '❌' : '✅'}</td>
+    const tbody = document.getElementById('log-tbody');
+    const wrapper = document.getElementById('log-wrapper');
+    if (!tbody) return;
+    const time = new Date().toLocaleTimeString('ko-KR', { hour12: false });
+    const row = `<tr ${type === 'error' ? 'class="log-error"' : ''}>
+                    <td>${time}</td><td>${activity}</td><td><b>${message}</b></td><td>${type === 'error' ? '❌' : '✅'}</td>
                 </tr>`;
-    
-    logTbody.insertAdjacentHTML('beforeend', row);
-    if (logTbody.rows.length > 500) logTbody.deleteRow(0); // 로그 과다 방지
-    if (logWrapper) logWrapper.scrollTop = logWrapper.scrollHeight;
+    tbody.insertAdjacentHTML('beforeend', row);
+    if (tbody.rows.length > 100) tbody.deleteRow(0);
+    if (wrapper) wrapper.scrollTop = wrapper.scrollHeight;
 }
-
-// 비전 데이터 및 서버 로그 수신 (UI 업데이트 전용)
-socket.on('vision_data', (data) => {
-    const distEl = document.getElementById('ui-dist');
-    const angleEl = document.getElementById('ui-angle');
-    if (distEl) distEl.textContent = data.dist.toFixed(1);
-    if (angleEl) angleEl.textContent = data.angle.toFixed(1);
-});
-
-socket.on('log', (data) => {
-    addLog(data.type || 'AutoControl', data.msg, data.status === 'success' ? 'info' : 'error');
-});
