@@ -17,8 +17,8 @@ class RobotManager:
         # 로봇의 실제 MAC 주소를 소문자로 입력하세요.
         # 예: "3c:61:05:xx:xx:xx"
         self.ROBOT_MACS = {
-            "cc:7b:5c:27:d3:c0": 0,  # 리더 로봇 (수동 조종용)
-            "d0:ef:76:47:d3:f4": 1   # 추적 로봇 (자동 추종용) 
+            "d0:ef:76:47:d3:f4": 0,   # 리더 로봇 (수동 조종용)
+            "cc:7b:5c:27:d3:c0": 1  # 추적 로봇 (자동 추종용) 
         }
 
     def get_mac_address(self, ip):
