@@ -2,12 +2,13 @@ const socket = io();
 window.robotState = { x: 0, y: 0, step: 25 };
 const MANUAL_ROBOT_ID = 0;
 
-// --- [추가] 보정값 동기화 함수 ---
+// --- [기존] 보정값 동기화 함수 유지 ---
 const syncCalibration = (robotId) => {
     const factor = document.getElementById(`calib-${robotId}`)?.value || "1.0";
     socket.emit('update_calibration', { id: robotId, factor: factor });
 };
 
+// --- [기존] 로봇 0 제어 함수 유지 ---
 window.moveRobot = (direction) => {
     const basePwm = parseInt(document.getElementById('manual-pwm')?.value || "80");
     const factor0 = parseFloat(document.getElementById('calib-0')?.value || "1.0");
@@ -33,15 +34,31 @@ window.moveRobot = (direction) => {
     }
 };
 
+// --- [추가] 로봇 1 비상제어 전송 함수 (기존 로직과 분리) ---
+function sendEmergencyCmd(command) {
+    // HTML의 로봇 0 PWM 값을 그대로 가져옴
+    const pwmVal = document.getElementById('manual-pwm')?.value || 80;
+    
+    socket.emit('emergency_control_robot1', { 
+        command: command,
+        pwm: pwmVal
+    });
+    
+    if (command === "stop") {
+        addLog('Emergency', 'Robot 1 STOP', 'error');
+    }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
-    // --- [추가] 이벤트 리스너 등록 ---
+    // --- [기존] 이벤트 리스너 등록 유지 ---
     document.getElementById('calib-0')?.addEventListener('change', () => syncCalibration(0));
     document.getElementById('calib-1')?.addEventListener('change', () => syncCalibration(1));
     setTimeout(() => { syncCalibration(0); syncCalibration(1); }, 1000);
 
-    // 기존 제어 로직 유지
     let isMoving = false;
     const dpad = document.querySelector('.d-pad');
+    
+    // --- [기존] D-Pad 제어 로직 유지 ---
     if (dpad) {
         const handleStart = (e) => {
             if (isMoving) return;
@@ -63,20 +80,46 @@ document.addEventListener('DOMContentLoaded', () => {
         dpad.ontouchstart = handleStart; dpad.ontouchend = handleEnd;
     }
 
+    // --- [기존 + 추가] 키보드 입력 통합 관리 ---
     document.onkeydown = (e) => {
         if (e.target.tagName === 'INPUT' || e.repeat) return;
+        
+        // 1. 로봇 0 제어 (WASD)
         const key = e.key.toLowerCase();
-        let dir = key === 'w' ? 'up' : key === 's' ? 'down' : key === 'a' ? 'left' : key === 'd' ? 'right' : '';
-        if (e.code === 'Space') { e.preventDefault(); dir = 'stop'; }
-        if (dir) { isMoving = true; window.moveRobot(dir); }
-    };
+        let dir0 = key === 'w' ? 'up' : key === 's' ? 'down' : key === 'a' ? 'left' : key === 'd' ? 'right' : '';
+        if (dir0) { isMoving = true; window.moveRobot(dir0); return; }
 
-    document.onkeyup = (e) => {
-        if (['w', 'a', 's', 'd'].includes(e.key.toLowerCase()) && isMoving) {
-            isMoving = false; window.moveRobot('stop');
+        // 2. 로봇 1 비상 제어 (방향키)
+        let dir1 = null;
+        switch(e.code) {
+            case "ArrowUp":    dir1 = "up";    break;
+            case "ArrowDown":  dir1 = "down";  break;
+            case "ArrowLeft":  dir1 = "left";  break;
+            case "ArrowRight": dir1 = "right"; break;
+        }
+        if (dir1) { isMoving = true; sendEmergencyCmd(dir1); return; }
+
+        // 3. 공통 비상 정지 (Space)
+        if (e.code === 'Space') { 
+            e.preventDefault(); 
+            isMoving = false;
+            window.moveRobot('stop'); 
+            sendEmergencyCmd('stop');
         }
     };
 
+    document.onkeyup = (e) => {
+        // 로봇 0 정지 (WASD 해제 시)
+        if (['w', 'a', 's', 'd'].includes(e.key.toLowerCase()) && isMoving) {
+            isMoving = false; window.moveRobot('stop');
+        }
+        // 로봇 1 정지 (방향키 해제 시)
+        if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) {
+            isMoving = false; sendEmergencyCmd("stop");
+        }
+    };
+
+    // --- [기존] 소켓 리스너 유지 ---
     socket.on('vision_data', (data) => {
         document.getElementById('ui-dist').textContent = data.dist.toFixed(1);
         document.getElementById('ui-angle').textContent = data.angle.toFixed(1);
@@ -84,56 +127,7 @@ document.addEventListener('DOMContentLoaded', () => {
     socket.on('log', (data) => addLog(data.type, data.msg, data.status === 'success' ? 'info' : 'error'));
 });
 
-// 로봇1 비상제어
-// 키 중복 입력 방지 변수
-let isMoving = false;
-
-// 1. 키를 눌렀을 때 (keydown)
-document.addEventListener('keydown', (event) => {
-    let cmd = null;
-    switch(event.code) {
-        case "ArrowUp":    cmd = "up";    break;
-        case "ArrowDown":  cmd = "down";  break;
-        case "ArrowLeft":  cmd = "left";  break;
-        case "ArrowRight": cmd = "right"; break;
-    }
-
-    if (cmd && !isMoving) {
-        isMoving = true; // 이동 중 상태로 변경
-        sendEmergencyCmd(cmd);
-    }
-});
-
-// 2. 키에서 손을 뗐을 때 (keyup)
-document.addEventListener('keyup', (event) => {
-    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.code)) {
-        isMoving = false; // 상태 초기화
-        sendEmergencyCmd("stop");
-    }
-});
-
-// 3. 공통 전송 함수 (HTML의 PWM 80 값 포함)
-function sendEmergencyCmd(command) {
-    // 이미지의 'PWM 80' 입력 필드 값을 가져옴
-    const pwmVal = document.querySelector('input[type="number"]')?.value || 80;
-    
-    socket.emit('emergency_control_robot1', { 
-        command: command,
-        pwm: pwmVal
-    });
-    
-    // 스페이스바 별도 처리 (비상 정지)
-    if (command === "stop") isMoving = false;
-}
-
-// 스페이스바는 눌렀을 때 즉시 정지
-document.addEventListener('keydown', (event) => {
-    if (event.code === "Space") {
-        event.preventDefault();
-        sendEmergencyCmd("stop");
-    }
-});
-
+// --- [기존] 로그 출력 함수 유지 ---
 function addLog(activity, message, type = 'info') {
     const tbody = document.getElementById('log-tbody');
     const wrapper = document.getElementById('log-wrapper');
