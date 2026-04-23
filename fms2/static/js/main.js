@@ -9,7 +9,7 @@ const syncCalibration = (robotId) => {
 };
 
 window.moveRobot = (direction) => {
-    const basePwm = parseInt(document.getElementById('manual-pwm')?.value || "40");
+    const basePwm = parseInt(document.getElementById('manual-pwm')?.value || "80");
     const factor0 = parseFloat(document.getElementById('calib-0')?.value || "1.0");
     
     const rightPwm = Math.round(basePwm * factor0);
@@ -82,6 +82,56 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('ui-angle').textContent = data.angle.toFixed(1);
     });
     socket.on('log', (data) => addLog(data.type, data.msg, data.status === 'success' ? 'info' : 'error'));
+});
+
+// 로봇1 비상제어
+// 키 중복 입력 방지 변수
+let isMoving = false;
+
+// 1. 키를 눌렀을 때 (keydown)
+document.addEventListener('keydown', (event) => {
+    let cmd = null;
+    switch(event.code) {
+        case "ArrowUp":    cmd = "up";    break;
+        case "ArrowDown":  cmd = "down";  break;
+        case "ArrowLeft":  cmd = "left";  break;
+        case "ArrowRight": cmd = "right"; break;
+    }
+
+    if (cmd && !isMoving) {
+        isMoving = true; // 이동 중 상태로 변경
+        sendEmergencyCmd(cmd);
+    }
+});
+
+// 2. 키에서 손을 뗐을 때 (keyup)
+document.addEventListener('keyup', (event) => {
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.code)) {
+        isMoving = false; // 상태 초기화
+        sendEmergencyCmd("stop");
+    }
+});
+
+// 3. 공통 전송 함수 (HTML의 PWM 80 값 포함)
+function sendEmergencyCmd(command) {
+    // 이미지의 'PWM 80' 입력 필드 값을 가져옴
+    const pwmVal = document.querySelector('input[type="number"]')?.value || 80;
+    
+    socket.emit('emergency_control_robot1', { 
+        command: command,
+        pwm: pwmVal
+    });
+    
+    // 스페이스바 별도 처리 (비상 정지)
+    if (command === "stop") isMoving = false;
+}
+
+// 스페이스바는 눌렀을 때 즉시 정지
+document.addEventListener('keydown', (event) => {
+    if (event.code === "Space") {
+        event.preventDefault();
+        sendEmergencyCmd("stop");
+    }
 });
 
 function addLog(activity, message, type = 'info') {

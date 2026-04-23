@@ -21,7 +21,7 @@ current_vision_mode = 'TRACK'
 last_cmd_time = 0
 
 # --- [수정] 보정값 저장 변수 추가 ---
-robot_calibrations = {0: 1.0, 1: 1.0}
+robot_calibrations = {0: 1.14, 1: 1.16}
 
 @app.route('/')
 def index():
@@ -121,6 +121,55 @@ def gen_frames():
 def handle_drive(data):
     cmd = str(data.get('command'))
     robot_mgr.send_command(0, cmd)
+
+# --- [추가] 로봇 1 비상 키보드 제어 (TRACK 모드 중 개입용) ---
+@socketio.on('emergency_control_robot1')
+def handle_emergency_robot1(data):
+    key_cmd = data.get('command')
+    
+    # HTML UI에서 넘어온 PWM 값 (예: 80)
+    try:
+        base_pwm = int(data.get('pwm', 80))
+    except:
+        base_pwm = 80
+        
+    target_id = 1
+    cali = robot_calibrations.get(target_id, 1.16)
+    
+    pwm_l, pwm_r = 0, 0
+
+    # 방향 로직
+    if key_cmd == 'up':
+        pwm_l, pwm_r = base_pwm, base_pwm
+    elif key_cmd == 'down':
+        pwm_l, pwm_r = -base_pwm, -base_pwm
+    elif key_cmd == 'left':
+        pwm_l, pwm_r = -base_pwm, base_pwm
+    elif key_cmd == 'right':
+        pwm_l, pwm_r = base_pwm, -base_pwm
+    elif key_cmd == 'stop':
+        pwm_l, pwm_r = 0, 0
+
+    # 보정치 적용 (80 * 1.16 = 92)
+    pwm_l_final = int(pwm_l)
+    pwm_r_final = int(pwm_r * cali)
+
+    def sign(n): return f"+{n}" if n >= 0 else str(n)
+    
+    # [최종 프로토콜] 로봇 0과 동일한 쉼표 포함 + 끝에 줄바꿈(\n) 추가
+    # 예: "a+80,d+92\n"
+    final_cmd = f"a{sign(pwm_l_final)},d{sign(pwm_r_final)}\n"
+    
+    # 로봇 1에게 명령 전송
+    robot_mgr.send_command(target_id, final_cmd)
+
+    # 로그 출력
+    socketio.emit('log', {
+        'type': 'EMERGENCY',
+        'msg': f"Robot 1 Override: {final_cmd.strip()}", # 로그에는 줄바꿈 제거 후 출력
+        'status': 'danger'
+    })
+    
 
 if __name__ == '__main__':
     threading.Thread(target=robot_mgr.start_server, args=(socketio,), daemon=True).start()

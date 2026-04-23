@@ -62,7 +62,7 @@ class RobotManager:
                 robot_id = self.ROBOT_MACS[mac]
                 with self.lock:
                     self.robots[robot_id] = client
-                print(f"✅ 로봇 {robot_id} 인식 성공 (MAC: {mac}, IP: {ip_address})")
+                print(f"✅ 로봇 {robot_id} 연결 성공 (MAC: {mac}, IP: {ip_address})")
             else:
                 # 등록되지 않은 MAC일 경우 에러 메시지 출력 후 연결 종료
 #                print(f"⚠️ 미등록 기기 접속 차단 - IP: {ip_address}, MAC: {mac}")
