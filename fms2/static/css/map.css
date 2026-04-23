@@ -1,14 +1,32 @@
-/* --- Zone 3: 맵 영역 --- */
+/* 실시간 비디오 스트리밍 태그 스타일 */
+.map-zone img {
+    width: 100%;           
+    height: 100%;          
+    
+    /* 해상도가 16:9이므로 contain을 쓰면 박스 안에 딱 맞게 들어갑니다 */
+    object-fit: contain;   
+
+    position: absolute;    
+    top: 0;
+    left: 0;
+    z-index: 1;            
+}
+
 .map-zone { 
     grid-area: map; 
     position: relative; 
-    background-color: #f1f3f5; /* 약간 연한 회색 배경 */
+    background-color: #000; 
     overflow: hidden;
-    /* [수정] 격자 배경 대신 map.jpg 배경 이미지 삽입 */
-    background-image: url('../assets/map.jpg');
-    background-size: contain;    /* 이미지 비율 유지하며 전체 표시 (여백 발생 가능) */
-    background-position: center; /* 중앙 정렬 */
-    background-repeat: no-repeat; /* 반복 방지 */
+
+    /* [추가] 중요: 이제 카메라가 1280x720이므로 박스 비율도 16:9로 고정합니다 */
+    aspect-ratio: 16 / 9; 
+    
+    /* 박스가 너무 커져서 화면을 벗어나지 않도록 너비 조절 */
+    width: 100%;
+    margin: 0 auto; 
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 /* 오버레이 정보창 - z-index를 90으로 높여서 가장 앞으로 */

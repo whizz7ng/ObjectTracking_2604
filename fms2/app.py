@@ -58,100 +58,107 @@ def handle_calibration(data):
         robot_calibrations[int(data.get('id'))] = float(data.get('factor', 1.0))
     except: pass
 
-# 카메라 장치 연결 (0번 카메라)
-cap = cv2.VideoCapture(0)
+# 카메라 장치 연결 (CAP_DSHOW 추가로 로딩 속도 향상)
+cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+
+# [중요] 압축 포맷을 MJPG로 먼저 설정하면 고해상도 로딩 속도가 빨라집니다
+cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+
+# 아까 성공했던 해상도로 강제 고정
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+# 버퍼 사이즈를 1로 줄여서 영상 지연(Lag) 방지
+cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
 last_error_angle = 0  # 이전 각도 오차 저장용
 
+"""
+[함수 기능 정의]
+1. 영상 스트리밍 및 ArUco 마커 인식 (Robot 0, 1)
+2. 로봇 간 물리적 거리(cm) 및 상대 각도(degree) 계산
+3. TRACK 모드: 거리 30cm 초과 시 PWM 75~150 범위 내에서 제어 주행
+4. 지능형 조향: 가변 Gain + Damping 브레이크 + 배면 회전 고정 로직 적용
+5. 안전 로직: 시야 이탈 시 즉시 정지 및 정지 명령 중복 전송 방지(was_stopped 플래그)
+6. 사용자 우선: 키보드 조작 시 자동 주행 명령 차단
+"""
+"""
+    [통합 제어 로직]
+    1. 각도 에러(error_angle): 양수(+)는 타겟이 로봇의 좌측에 있음을 의미
+    2. 조향(w): 양수(+)일 때 좌측 바퀴 감속(v-w), 우측 바퀴 가속(v+w) -> 좌회전
+    3. 수동 일치: 수동 좌회전(a+40, d+88)과 자동 제어 로직의 방향성을 통일함
+"""
 def gen_frames():
-    """
-    [함수 기능 정의]
-    1. 영상 스트리밍 및 ArUco 마커 인식 (Robot 0, 1)
-    2. 로봇 간 물리적 거리(cm) 및 상대 각도(degree) 계산
-    3. TRACK 모드: 거리 23cm 초과 시 PWM 75~150 범위 내에서 제어 주행
-    4. 지능형 조향: 가변 Gain + Damping 브레이크 + 배면 회전 고정 로직 적용
-    5. 안전 로직: 시야 이탈 시 즉시 정지 및 정지 명령 중복 전송 방지(was_stopped 플래그)
-    6. 사용자 우선: 키보드 조작 시 자동 주행 명령 차단
-    """
+
     global last_cmd_time, current_vision_mode, robot_calibrations, is_robot1_manual, was_stopped, last_error_angle
     
     while True:
         success, frame = cap.read()
         if not success: break
         
-        # 1. 마커 탐지 및 좌표 획득 (vision.py 호출)
         frame, markers = vision.process_frame(frame)
 
         if current_vision_mode == 'TRACK':
             now = time.time()
-            # 0.05초(20Hz) 간격으로 제어 명령 계산 (너무 빠르면 시리얼 통신 병목 발생)
             if now - last_cmd_time > 0.05:
 
-                # 2. 로봇별 포즈(좌표+각도) 산출 (좌/우 듀얼 마커 조합 방식)
                 target_robot = vision.get_robot_pose(markers, 10, 11)   # 로봇 0
-                follower_robot = vision.get_robot_pose(markers, 20, 21) # 로봇 1 (추적기)
+                follower_robot = vision.get_robot_pose(markers, 20, 21) # 로봇 1
 
                 if target_robot['detected'] and follower_robot['detected']:
-                    # 두 로봇 사이의 거리 및 상대 각도 계산
                     r_pos, r_head = follower_robot['center'], follower_robot['heading']
                     t_pos = target_robot['center']
                     
-                    # 피타고라스 정리로 픽셀 거리 계산 후 cm로 변환
                     dist_px = math.sqrt((t_pos[0]-r_pos[0])**2 + (t_pos[1]-r_pos[1])**2)
                     dist_cm = dist_px * vision.pixel_to_cm
                     
-                    # 삼각함수를 이용한 타겟 방향각 계산 (수학적 좌표계: 왼쪽 +, 오른쪽 -)
                     target_rad = math.atan2(t_pos[1]-r_pos[1], t_pos[0]-r_pos[0])
                     error_angle = (math.degrees(target_rad) - r_head + 180) % 360 - 180
 
-                    # UI 데이터 전송
                     socketio.emit('vision_data', {"dist": round(dist_cm, 1), "angle": round(error_angle, 1)})
 
-                    # 3. 자동 주행 판단 (수동 조작 중이 아닐 때만)
                     if not is_robot1_manual:
-                        stop_threshold = 23.0 # 정지 거리 (cm)
+                        stop_threshold = 30.0 
                         
                         if dist_cm > stop_threshold:
-                            # [선속도 v 계산] 거리에 비례한 비례 제어
                             dist_error = dist_cm - stop_threshold
                             v = dist_error * 2.2 
                             
-                            # --- [지능형 조향 w 계산 로직 시작] ---
-                            deadzone = 10.0      # 조향 불감대
-                            base_w_gain = 0.8    # 기본 조향 계수
-                            d_gain = 0.3         # Damping 브레이크 계수
-
-
-                            # --- [수정] 조향 방향성 교정 ---
+                            # --- [조향 w 계산 로직] ---
+                            deadzone = 10.0
+                            base_w_gain = 0.8
+                            d_gain = 0.3
 
                             if abs(error_angle) <= deadzone:
                                 w = 0
                                 last_error_angle = 0
                             else:
+                                # [A] 배면 회전: 140도 초과 시 표의 논리에 따라 방향 결정
+                                # 양수(+)면 내 왼쪽 -> 좌회전 필요 -> w는 양수(+)
                                 if abs(error_angle) > 140:
-                                    # 타겟이 좌측(각도 부호에 따라)에 있다면 
-                                    # 수동 좌회전 명령(a 작게, d 크게)이 나오도록 w 방향을 조정
-                                    # 기존: w = 100 if error_angle > 0 else -100
-                                    w = -100 if error_angle > 0 else 100 
+                                    w = 100 if error_angle > 0 else -100
+                                
+                                # [B] 정밀 PD 제어: 표의 논리(양수일 때 좌회전)를 그대로 따름
                                 else:
                                     adjusted_error = error_angle - (deadzone if error_angle > 0 else -deadzone)
                                     
+                                    # 가변 Gain: 정면에 가까워질수록 조심스럽게 조향
                                     dynamic_gain = base_w_gain * (abs(adjusted_error) / 90.0)
                                     dynamic_gain = max(0.4, min(dynamic_gain, base_w_gain))
                                     
                                     p_term = adjusted_error * dynamic_gain
                                     d_term = (error_angle - last_error_angle) * d_gain
                                     
-                                    # [핵심] 여기서 마이너스를 붙여서 수동 조작 방향과 일치시킵니다.
-                                    w = -(p_term + d_term) 
+                                    # 부호 반전 없이 그대로 사용 (표의 논리와 일치)
+                                    w = p_term + d_term 
                                 
                                 last_error_angle = error_angle
 
-                            # 회전량 최종 제한: 선속도(v) 대비 과도한 회전 방지
+                            # 회전량 최종 제한
                             max_w = 100 if abs(v) < 80 else abs(v) * 0.9
                             w = max(min(w, max_w), -max_w)
-                            # --- [지능형 조향 w 계산 로직 종료] ---
 
-                            # 4. PWM 제한 및 최소 구동력 확보
+                            # 4. PWM 계산: w가 양수면 a(좌) < d(우) 가 되어 좌회전함
                             min_pwm, limit = 75, 150
                             pwm_l_raw = v - w 
                             pwm_r_raw = v + w
@@ -159,30 +166,27 @@ def gen_frames():
                             pwm_l = max(min(pwm_l_raw, limit), -limit)
                             pwm_r = max(min(pwm_r_raw, limit), -limit)
 
-                            # 정지 상태에서 출발 시 모터 마찰력을 이기기 위한 최소 PWM 보정
                             if 0 < pwm_l < min_pwm: pwm_l = min_pwm
                             elif -min_pwm < pwm_l < 0: pwm_l = -min_pwm
                             if 0 < pwm_r < min_pwm: pwm_r = min_pwm
                             elif -min_pwm < pwm_r < 0: pwm_r = -min_pwm
 
-                            # 5. 최종 출력 계산 (우측 모터 보정 계수 적용)
+                            # 5. 최종 보정 및 명령 생성
                             current_cali = robot_calibrations.get(1, 1.0)
                             pwm_l_final = int(pwm_l)
                             pwm_r_final = int(pwm_r * current_cali)
                             pwm_r_final = max(min(pwm_r_final, limit), -limit)
 
-                            # 문자열 형태의 명령 생성 (예: a+100,d+116)
                             def sign(n): return f"+{n}" if n >= 0 else str(n)
                             final_auto_cmd = f"a{sign(pwm_l_final)},d{sign(pwm_r_final)}\n"
                             
-                            move_dir = "직진" if w == 0 else ("좌회전" if w > 0 else "우회전")
+                            # 로그 판정: w가 양수이면 좌회전
+                            move_dir = "직진" if abs(w) < 1 else ("좌회전" if w > 0 else "우회전")
                             
-                            # 로그 출력 및 명령 전송
                             print(f"[자동] {move_dir} | 계수: {current_cali:.2f} | 명령: {final_auto_cmd.strip()} | 각도: {error_angle:.1f}°")
                             robot_mgr.send_command(1, final_auto_cmd)
-                            was_stopped = False # 주행 중이므로 정지 플래그 해제
+                            was_stopped = False 
 
-                            # 관제 시스템 실시간 로그 전송
                             socketio.emit('log', {
                                 'type': 'AUTO',
                                 'msg': f"[자동] {move_dir} | 명령: {final_auto_cmd.strip()} | 각도: {error_angle:.1f}°",
@@ -190,7 +194,6 @@ def gen_frames():
                             })
                             
                         else:
-                            # 목표 도달 시 정지 (중복 명령 방지)
                             if not was_stopped:
                                 robot_mgr.send_command(1, "a+0,d+0\n")
                                 was_stopped = True 
@@ -198,7 +201,6 @@ def gen_frames():
                                 socketio.emit('log', {'type': 'SYSTEM', 'msg': '목표 도달: 정지', 'status': 'success'})
                 
                 else:
-                    # 마커 인식 실패 시 안전을 위해 즉시 정지
                     if not is_robot1_manual and not was_stopped:
                         robot_mgr.send_command(1, "a+0,d+0\n")
                         was_stopped = True
@@ -206,7 +208,6 @@ def gen_frames():
 
                 last_cmd_time = now
 
-        # 영상 데이터를 JPG로 인코딩하여 스트리밍
         ret, buffer = cv2.imencode('.jpg', frame)
         yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
         
